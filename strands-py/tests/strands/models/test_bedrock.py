@@ -2742,6 +2742,39 @@ def test_format_request_message_content_normalizes_non_dict_tool_use_input(model
     }
 
 
+@pytest.mark.parametrize(
+    ("tool_input", "expected"),
+    [
+        ({"": "x"}, {}),
+        ({" ": "x", "a": 1}, {"a": 1}),
+        ({"email": {"content": "<p>Hello</p>", "": None}}, {"email": {"content": "<p>Hello</p>"}}),
+        ({"a": [{"": ""}, {"b": {"\t": 1, "c": 2}}]}, {"a": [{}, {"b": {"c": 2}}]}),
+    ],
+    ids=["empty_key", "whitespace_key", "nested_dict", "nested_list"],
+)
+def test_format_request_message_content_drops_blank_tool_use_input_keys(model, tool_input, expected, caplog):
+    original = copy.deepcopy(tool_input)
+    content = {"toolUse": {"toolUseId": "tool_001", "name": "send_message", "input": tool_input}}
+
+    with caplog.at_level(logging.WARNING, logger="strands.models.bedrock"):
+        formatted = model._format_request_message_content(content)
+
+    assert formatted == {"toolUse": {"input": expected, "name": "send_message", "toolUseId": "tool_001"}}
+    assert tool_input == original, "the stored message must not be mutated"
+    assert "tool_name=<send_message>" in caplog.text
+
+
+def test_format_request_message_content_keeps_tool_use_input_without_blank_keys(model, caplog):
+    tool_input = {"email": {"content": "hi", "to": ["a@example.com"]}, "count": 0, "note": " padded "}
+    content = {"toolUse": {"toolUseId": "tool_001", "name": "send_message", "input": tool_input}}
+
+    with caplog.at_level(logging.WARNING, logger="strands.models.bedrock"):
+        formatted = model._format_request_message_content(content)
+
+    assert formatted["toolUse"]["input"] == tool_input
+    assert caplog.text == ""
+
+
 def test_format_request_message_content_does_not_mutate_empty_tool_result(model, model_id):
     """Test that normalizing empty toolResult content does not mutate the original messages."""
     messages = [

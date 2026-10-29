@@ -202,6 +202,35 @@ def _fields_with_drop_block(fields: dict[str, Any]) -> dict[str, Any] | None:
     return {**fields, "anthropic_beta": betas, "thinking": thinking}
 
 
+def _drop_blank_keys(value: Any) -> tuple[Any, int]:
+    """Copy a JSON value without dict keys that are empty or whitespace-only, at any depth.
+
+    Bedrock rejects a toolUse input containing such a key, so a history holding one could never be replayed.
+
+    Returns:
+        The cleaned copy and the number of keys removed.
+    """
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        dropped = 0
+        for key, item in value.items():
+            if isinstance(key, str) and not key.strip():
+                dropped += 1
+                continue
+            cleaned[key], item_dropped = _drop_blank_keys(item)
+            dropped += item_dropped
+        return cleaned, dropped
+    if isinstance(value, list):
+        cleaned_items = []
+        dropped = 0
+        for item in value:
+            cleaned_item, item_dropped = _drop_blank_keys(item)
+            cleaned_items.append(cleaned_item)
+            dropped += item_dropped
+        return cleaned_items, dropped
+    return value, 0
+
+
 class BedrockModel(Model):
     """AWS Bedrock model provider implementation.
 
@@ -1308,6 +1337,15 @@ class BedrockModel(Model):
         if "toolUse" in content:
             tool_use = content["toolUse"]
             tool_input = tool_use.get("input")
+            if isinstance(tool_input, dict):
+                tool_input, dropped_keys = _drop_blank_keys(tool_input)
+                if dropped_keys:
+                    logger.warning(
+                        "tool_name=<%s>, dropped_keys=<%d> | removed empty or whitespace-only keys from tool use input"
+                        " that bedrock rejects",
+                        tool_use["name"],
+                        dropped_keys,
+                    )
             return {
                 "toolUse": {
                     "input": tool_input if isinstance(tool_input, dict) else {},
